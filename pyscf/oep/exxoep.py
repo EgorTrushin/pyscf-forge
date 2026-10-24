@@ -50,7 +50,10 @@ def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
 
     The local potential of each cycle is provided by
     oep.get_local_potential, so the same driver serves the restricted and
-    unrestricted EXX-OEP and RPA-OEP classes.
+    unrestricted EXX-OEP and RPA-OEP classes. As in the SCF kernel of PySCF,
+    the iterations are converged when both the change of the total energy is
+    below oep.conv_tol and the norm of the orbital gradient is below
+    oep.conv_tol_grad (default sqrt(conv_tol)).
 
     Returns:
         converged, e_tot, mo_energy, mo_coeff, pot
@@ -64,6 +67,10 @@ def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
     if mo_coeff is None:
         mo_coeff = oep.mo_coeff
 
+    conv_tol_grad = oep.conv_tol_grad
+    if conv_tol_grad is None:
+        conv_tol_grad = numpy.sqrt(oep.conv_tol)
+
     h1e = oep._scf.get_hcore()
     s1e = oep._scf.get_ovlp()
     e_tot, vj, vxnl = oep.get_energies_and_potentials(mo_coeff)
@@ -74,18 +81,21 @@ def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
     pot = {}
     for cycle in range(oep.max_cycle):
         vj, v_ao, pot = oep.get_local_potential(mo_energy, mo_coeff, vj, vxnl)
-        fock = mix_fock(h1e + vj + v_ao, s1e, mo_coeff)
+        fock = h1e + vj + v_ao
+        # Orbital gradient of the orbitals which entered this cycle
+        norm_gorb = numpy.linalg.norm(oep.get_grad(mo_coeff, oep.mo_occ, fock))
+        fock = mix_fock(fock, s1e, mo_coeff)
         mo_energy, mo_coeff = oep.eig(fock, s1e)
         e_tot, vj, vxnl = oep.get_energies_and_potentials(mo_coeff)
-        # Correlation energy of the orbitals of this cycle
+        # Correlation energy of the orbitals which entered this cycle
         e_tot += pot.get('e_corr', 0)
 
         if e_last is None:
-            log.info('cycle= %d E= %.15g', cycle + 1, e_tot)
+            log.info('cycle= %d E= %.15g  |g|= %4.3g', cycle + 1, e_tot, norm_gorb)
         else:
             de = e_tot - e_last
-            log.info('cycle= %d E= %.15g  delta_E= %4.3g', cycle + 1, e_tot, de)
-            if abs(de) < oep.conv_tol:
+            log.info('cycle= %d E= %.15g  delta_E= %4.3g  |g|= %4.3g', cycle + 1, e_tot, de, norm_gorb)
+            if abs(de) < oep.conv_tol and norm_gorb < conv_tol_grad:
                 converged = True
                 break
         e_last = e_tot
@@ -143,6 +153,9 @@ class REXXOEP(lib.StreamObject):
             Maximum number of self-consistent iterations. Default is 50.
         conv_tol : float
             Convergence threshold on the total energy. Default is 1e-8.
+        conv_tol_grad : float
+            Convergence threshold on the norm of the orbital gradient.
+            Default is None, which means sqrt(conv_tol).
         thr_fai_oep : float
             Threshold T_ai for the occupied-virtual coupling filter of the
             OEP basis (Section IIA5). Default is 5e-2.
@@ -177,12 +190,13 @@ class REXXOEP(lib.StreamObject):
 
     max_cycle = 50
     conv_tol = 1e-8
+    conv_tol_grad = None
     thr_fai_oep = 5e-2
     linear_mixing = -1.0
 
     _keys = {
         'mol', 'oep_basis', 'use_homo_condition', 'vh_via_oep', 'space_sym',
-        'max_cycle', 'conv_tol', 'thr_fai_oep', 'linear_mixing',
+        'max_cycle', 'conv_tol', 'conv_tol_grad', 'thr_fai_oep', 'linear_mixing',
         'auxmol', 'grids', 'y', 'WII', 'WII_inv', 'yII', 'charge_norm',
         'converged', 'e_tot', 'mo_energy', 'mo_coeff', 'mo_occ',
         'vref_oep', 'vrest_oep', 'scf_summary',
@@ -251,6 +265,7 @@ class REXXOEP(lib.StreamObject):
         log.info('space_sym = %s', self.space_sym)
         log.info('max_cycle = %d', self.max_cycle)
         log.info('conv_tol = %g', self.conv_tol)
+        log.info('conv_tol_grad = %s', self.conv_tol_grad)
         log.info('thr_fai_oep = %g', self.thr_fai_oep)
         if self.linear_mixing > 0:
             log.info('linear mixing = %g', self.linear_mixing)
@@ -297,6 +312,11 @@ class REXXOEP(lib.StreamObject):
         if mo_occ is None:
             mo_occ = self.mo_occ
         return hf.make_rdm1(mo_coeff, mo_occ)
+
+    def get_grad(self, mo_coeff, mo_occ, fock):
+        '''Orbital gradient, the occupied-virtual block of the Fock matrix in
+        the basis of mo_coeff, as pyscf.scf.hf.get_grad.'''
+        return hf.get_grad(mo_coeff, mo_occ, fock)
 
     def get_energies_and_potentials(self, mo_coeff):
         '''Hartree-Fock energy functional of the given orbitals.

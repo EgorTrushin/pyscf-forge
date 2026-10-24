@@ -101,6 +101,10 @@ class UEXXOEP(exxoep.REXXOEP):
             mo_occ = self.mo_occ
         return uhf.make_rdm1(mo_coeff, mo_occ)
 
+    def get_grad(self, mo_coeff, mo_occ, fock):
+        '''Orbital gradient of both spins, as pyscf.scf.uhf.get_grad.'''
+        return uhf.get_grad(mo_coeff, mo_occ, fock)
+
     def get_energies_and_potentials(self, mo_coeff):
         '''Hartree-Fock energy functional of the given orbitals.
 
