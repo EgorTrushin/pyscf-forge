@@ -211,7 +211,7 @@ class REXXOEP(lib.StreamObject):
     _keys = {
         'mol', 'oep_basis', 'use_homo_condition', 'vh_via_oep', 'space_sym',
         'max_cycle', 'conv_tol', 'thr_fai_oep', 'linear_mixing',
-        'auxmol', 'grids', 'y', 'WII', 'yII', 'charge_norm',
+        'auxmol', 'grids', 'y', 'WII', 'WII_inv', 'yII', 'charge_norm',
         'converged', 'e_tot', 'mo_energy', 'mo_coeff', 'mo_occ',
         'vref_oep', 'vrest_oep', 'scf_summary',
     }
@@ -240,6 +240,7 @@ class REXXOEP(lib.StreamObject):
         self.grids = None
         self.y = None
         self.WII = None
+        self.WII_inv = None
         self.yII = None
         self.charge_norm = None
         self._int3c = None
@@ -306,7 +307,7 @@ class REXXOEP(lib.StreamObject):
             self.grids.build()
         ao = self.auxmol.eval_gto('GTOval', self.grids.coords)
         self.y = ao.T.dot(self.grids.weights)
-        self.WII = self.get_WII()
+        self.WII, self.WII_inv = self.get_WII()
         self.yII = self.WII.T.dot(self.y)
         self.charge_norm = numpy.dot(self.yII, self.yII)
         return self
@@ -360,7 +361,11 @@ class REXXOEP(lib.StreamObject):
         return numpy.einsum('Pii->P', ints_3c[:, :nocc, :nocc])
 
     def get_WII(self):
-        '''First two steps of the OEP basis preprocessing (Sections IIB1, IIB2).'''
+        '''First two steps of the OEP basis preprocessing (Sections IIB1, IIB2).
+
+        Returns:
+            WII and its left inverse WII_inv (WII_inv.dot(WII) = 1, Section IIC2)
+        '''
         smat = self.auxmol.intor('int2c2e')
         diag = 1. / numpy.sqrt(numpy.diag(smat))
         smat = diag[:, None] * smat * diag
@@ -372,10 +377,10 @@ class REXXOEP(lib.StreamObject):
             symvec[abs(symvec) > 1e-10] = 1.
             eigs[abs(evecs.T.dot(symvec)) < 1e-10] = 0.
             mask = abs(eigs) > 1e-10
-            smh = evecs[:, mask] / numpy.sqrt(eigs[mask])
-        else:
-            smh = evecs / numpy.sqrt(eigs)
-        return diag[:, None] * smh
+            eigs, evecs = eigs[mask], evecs[:, mask]
+        smh = evecs / numpy.sqrt(eigs)
+        sh = evecs.T * numpy.sqrt(eigs)[:, None]
+        return diag[:, None] * smh, sh / diag
 
     def get_W3_charge(self):
         '''Projection on the charge-free subspace (Section IIB3).'''
@@ -398,17 +403,18 @@ class REXXOEP(lib.StreamObject):
             thr_fai = self.thr_fai_oep
         trans = self.WII.dot(W3)
         amat = self._get_amat(trans, ints_3c, nocc)
-        return self._filter_coupling(trans, amat, thr_fai)
+        return trans.dot(self._coupling_vectors(amat, thr_fai))
 
     def _get_amat(self, trans, ints_3c, nocc):
         naux = ints_3c.shape[0]
         dmat = trans.T.dot(ints_3c[:, nocc:].reshape(naux, -1))
         return dmat.dot(dmat.T)
 
-    def _filter_coupling(self, trans, amat, thr_fai):
+    def _coupling_vectors(self, amat, thr_fai):
+        '''Eigenvectors of the coupling matrix with eigenvalues >= thr_fai.'''
         eigs, evecs = scipy.linalg.eigh(amat)
         nsing = numpy.count_nonzero(eigs < thr_fai)
-        return trans.dot(evecs[:, nsing:])
+        return evecs[:, nsing:]
 
     def get_v_ref(self, u):
         '''Fermi-Amaldi reference potential (Section IIB4), normalized to

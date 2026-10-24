@@ -25,13 +25,21 @@ Simple usage::
     >>> mol = gto.M(atom='C 0 0 -0.646514; O 0 0 0.484886', basis='cc-pvtz')
     >>> mf = scf.RHF(mol).density_fit().run()
     >>> mf_oep = oep.EXXOEP(mf, 'aug-cc-pvdz-ri').run()
+
+Kohn-Sham inversion of a reference density::
+
+    >>> inv = oep.KSINV(mf, 'aug-cc-pvdz-ri', dm_ref, e_ref).run()
 '''
 
 from pyscf import scf
 from pyscf.oep import exxoep
 from pyscf.oep import uexxoep
+from pyscf.oep import ksinv
+from pyscf.oep import uksinv
 from pyscf.oep.exxoep import REXXOEP
 from pyscf.oep.uexxoep import UEXXOEP
+from pyscf.oep.ksinv import RKSINV
+from pyscf.oep.uksinv import UKSINV
 
 
 def EXXOEP(mf, oep_basis, **kwargs):
@@ -49,3 +57,21 @@ def EXXOEP(mf, oep_basis, **kwargs):
         return exxoep.REXXOEP(mf, oep_basis, **kwargs)
     else:
         raise NotImplementedError('EXXOEP is not available for %s' % mf.__class__)
+
+
+def KSINV(mf, oep_basis, dm_ref, e_ref=None, ip=None, **kwargs):
+    '''Response-function Kohn-Sham inversion of the density dm_ref.
+
+    Returns a RKSINV object for RHF/RKS and a UKSINV object for UHF/UKS
+    mean-field objects. Open-shell ROHF/ROKS objects are converted to UHF/UKS.
+    See RKSINV and UKSINV for the arguments.
+    '''
+    if isinstance(mf, scf.uhf.UHF):
+        return uksinv.UKSINV(mf, oep_basis, dm_ref, e_ref, ip, **kwargs)
+    elif isinstance(mf, scf.rohf.ROHF) and mf.mol.spin != 0:
+        return uksinv.UKSINV(scf.addons.convert_to_uhf(mf), oep_basis, dm_ref, e_ref, ip,
+                             **kwargs)
+    elif isinstance(mf, scf.hf.RHF):
+        return ksinv.RKSINV(mf, oep_basis, dm_ref, e_ref, ip, **kwargs)
+    else:
+        raise NotImplementedError('KSINV is not available for %s' % mf.__class__)

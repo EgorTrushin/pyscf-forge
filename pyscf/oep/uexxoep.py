@@ -245,7 +245,7 @@ class UEXXOEP(exxoep.REXXOEP):
         trans = self.WII.dot(W3)
         amat = .5 * (self._get_amat(trans, ints_3c[0], nocc[0]) +
                      self._get_amat(trans, ints_3c[1], nocc[1]))
-        return self._filter_coupling(trans, amat, thr_fai)
+        return trans.dot(self._coupling_vectors(amat, thr_fai))
 
     def kernel(self, mo_energy=None, mo_coeff=None):
         '''Runs the self-consistent OEP calculation.
