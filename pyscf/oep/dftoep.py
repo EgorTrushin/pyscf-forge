@@ -107,27 +107,35 @@ class DFTOEPBase:
             self.ip = self.get_ip(mo_coeff)
         return e_tot, vj, numpy.asarray(veff) - vj
 
-    def _ion_energy(self, mo_coeff_ab, mo_occ_ab, charge, spin):
-        '''Frozen-orbital energy of the ion with functional xc_homo, using the
-        integration grids and density fitting of the mean-field object.'''
+    def _xc_homo_mf(self, mol, ks_class):
+        '''Kohn-Sham object (ks_class = dft.RKS or dft.UKS) with the functional
+        xc_homo, which shares the integration grids and density fitting of the
+        mean-field object, so that their errors cancel in the ionization
+        potential. The neutral system and the ion are set up identically.'''
         mf = self._scf
+        mf_x = ks_class(mol, xc=self.xc_homo)
+        mf_x.grids = mf.grids
+        mf_x.nlcgrids = mf.nlcgrids
+        if getattr(mf, 'with_df', None) is not None:
+            mf_x = mf_x.density_fit(with_df=mf.with_df, only_dfj=getattr(mf, 'only_dfj', False))
+        mf_x.verbose = 0
+        return mf_x
+
+    def _ion_energy(self, mo_coeff_ab, mo_occ_ab, charge, spin):
+        '''Frozen-orbital energy of the ion with functional xc_homo.'''
         mol = self.mol.copy()
         mol.charge = charge
         mol.spin = spin
         mol.build(False, False)
-        mf_ion = dft.UKS(mol, xc=self.xc_homo)
-        mf_ion.grids = mf.grids
-        mf_ion.nlcgrids = mf.nlcgrids
-        if getattr(mf, 'with_df', None) is not None:
-            mf_ion = mf_ion.density_fit(with_df=mf.with_df)
-        mf_ion.verbose = 0
+        mf_ion = self._xc_homo_mf(mol, dft.UKS)
         dm = mf_ion.make_rdm1(mo_coeff_ab, mo_occ_ab)
         return energy_tot(mf_ion, dm)[0]
 
     def _neutral_energy(self, mo_coeff):
-        mf = self._scf.copy()
-        mf.xc = self.xc_homo
-        return energy_tot(mf, self.make_rdm1(mo_coeff))[0]
+        '''Energy of the neutral system with functional xc_homo.'''
+        dm = self.make_rdm1(mo_coeff)
+        ks_class = dft.RKS if dm.ndim == 2 else dft.UKS
+        return energy_tot(self._xc_homo_mf(self.mol, ks_class), dm)[0]
 
 
 class RDFTOEP(DFTOEPBase, exxoep.REXXOEP):
