@@ -75,10 +75,14 @@ class UDFTOEP(DFTOEPBase, uexxoep.UEXXOEP):
     def get_ip(self, mo_coeff):
         '''Alpha and beta ionization potentials E(N-1) - E(N) with the
         functional xc_homo for the frozen orbitals mo_coeff, removing one
-        electron from the alpha or beta HOMO.'''
+        electron from the alpha or beta HOMO. None for a spin without
+        electrons.'''
         e_n = self._neutral_energy(mo_coeff)
         ip = []
         for s, dspin in ((0, -1), (1, 1)):
+            if self.nocc[s] == 0:
+                ip.append(None)
+                continue
             mo_occ = numpy.array(self.mo_occ, copy=True)
             mo_occ[s, self.nocc[s] - 1] = 0
             e_ion = self._ion_energy(mo_coeff, mo_occ, self.mol.charge + 1,

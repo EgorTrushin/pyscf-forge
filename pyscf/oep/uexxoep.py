@@ -94,6 +94,14 @@ class UEXXOEP(exxoep.REXXOEP):
         logger.new_logger(self, verbose).info('spin_sym = %s', self.spin_sym)
         return self
 
+    def build(self):
+        # The OEP equation of a spin without electrons has no solution (no
+        # occupied-virtual pairs); spin_sym gives such a spin the common potential.
+        if not self.spin_sym and min(self.nocc) == 0:
+            raise NotImplementedError('%s for a spin without electrons requires spin_sym=True'
+                                      % self.__class__.__name__)
+        return exxoep.REXXOEP.build(self)
+
     def make_rdm1(self, mo_coeff=None, mo_occ=None):
         if mo_coeff is None:
             mo_coeff = self.mo_coeff
