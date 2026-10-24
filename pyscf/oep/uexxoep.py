@@ -32,7 +32,6 @@ References:
 import numpy
 import scipy.linalg
 
-from pyscf import lib
 from pyscf.lib import logger
 from pyscf.scf import uhf
 from pyscf.oep import exxoep
@@ -138,20 +137,6 @@ class UEXXOEP(exxoep.REXXOEP):
         e_a, c_a = exxoep.REXXOEP.eig(self, h[0], s)
         e_b, c_b = exxoep.REXXOEP.eig(self, h[1], s)
         return numpy.array((e_a, e_b)), numpy.array((c_a, c_b))
-
-    def _diis_mixer(self):
-        # DIIS with the commutator FDS - SDF of each spin as error vector
-        adiis = lib.diis.DIIS(self)
-        nocc = self.nocc
-
-        def mix(fock, s1e, mo_coeff):
-            err = []
-            for s in (0, 1):
-                c_occ = mo_coeff[s][:, :nocc[s]]
-                dm = c_occ.dot(c_occ.T)
-                err.append(fock[s].dot(dm).dot(s1e) - s1e.dot(dm).dot(fock[s]))
-            return adiis.update(fock, xerr=numpy.array(err))
-        return mix
 
     def get_local_potential(self, mo_energy, mo_coeff, vj, vxnl):
         '''Solves the EXX-OEP equations for the alpha and beta orbitals.

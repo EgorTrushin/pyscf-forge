@@ -42,7 +42,6 @@ from pyscf.lib import logger
 from pyscf import df
 from pyscf.dft import gen_grid
 from pyscf.gw.rpa import _get_scaled_legendre_roots
-from pyscf.scf import diis as scf_diis
 from pyscf.oep import exxoep
 
 
@@ -303,15 +302,6 @@ class RRPAOEP(RPABase, exxoep.REXXOEP):
         exxoep.REXXOEP.__init__(self, mf, oep_basis, use_homo_condition,
                                 vh_via_oep, space_sym)
         self._init_rpa(ri_basis)
-
-    def _diis_mixer(self):
-        adiis = scf_diis.CDIIS(self)
-        nocc = self.nocc
-
-        def mix(fock, s1e, mo_coeff):
-            c_occ = mo_coeff[:, :nocc]
-            return adiis.update(s1e, 2 * c_occ.dot(c_occ.T), fock)
-        return mix
 
     def get_local_potential(self, mo_energy, mo_coeff, vj, vxnl):
         '''EXX-OEP exchange potential plus RPA correlation potential.

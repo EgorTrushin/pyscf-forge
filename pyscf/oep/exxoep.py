@@ -42,6 +42,7 @@ from pyscf.lib import logger
 from pyscf import df
 from pyscf.dft import gen_grid
 from pyscf.scf import hf
+from pyscf.scf import diis as scf_diis
 
 
 def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
@@ -533,8 +534,10 @@ class REXXOEP(lib.StreamObject):
         return self._diis_mixer()
 
     def _diis_mixer(self):
-        adiis = lib.diis.DIIS(self)
-        return lambda fock, s1e, mo_coeff: adiis.update(fock)
+        # CDIIS of PySCF: commutator SDF - FDS as error vector, in the
+        # orthonormal basis in which the Fock matrix is diagonalized
+        adiis = scf_diis.CDIIS(self, Corth=self._x_lindep)
+        return lambda fock, s1e, mo_coeff: adiis.update(s1e, self.make_rdm1(mo_coeff), fock)
 
     def kernel(self, mo_energy=None, mo_coeff=None):
         '''Runs the self-consistent OEP calculation, starting from the
