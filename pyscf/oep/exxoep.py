@@ -409,8 +409,13 @@ class REXXOEP(lib.StreamObject):
         z = ints_3c[:, idx, idx].sum(axis=1) / ndeg
         return z, self.WII.T.dot(z)
 
-    def get_homo_target(self, mo_coeff, nocc, vxnl):
-        '''The value <HOMO|v_ref|HOMO> required by the HOMO condition.'''
+    def get_homo_target(self, mo_coeff, nocc, vxnl, vj=None, spin=None):
+        '''The value <HOMO|v_ref|HOMO> required by the HOMO condition.
+
+        For EXX-OEP the expectation value of the non-local exchange potential
+        vxnl. vj and the spin index (unrestricted classes) are available for
+        other conditions in subclasses.
+        '''
         c_homo = mo_coeff[:, nocc - 1]
         return reduce(numpy.dot, (c_homo, vxnl, c_homo))
 
@@ -494,7 +499,7 @@ class REXXOEP(lib.StreamObject):
         z = homo_target = None
         if self.use_homo_condition:
             z, zII = self.get_z_and_zII(ints_3c, mo_energy, nocc)
-            homo_target = self.get_homo_target(mo_coeff, nocc, vxnl)
+            homo_target = self.get_homo_target(mo_coeff, nocc, vxnl, vj)
             vref_oep = self.get_v_ref_w_homo(u, zII, homo_target)
             W3 = self.get_W3_charge_and_homo(zII)
         else:

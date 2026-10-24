@@ -177,7 +177,7 @@ class UEXXOEP(exxoep.REXXOEP):
             u_avg = .5 * (u[0] + u[1])
             if self.use_homo_condition:
                 z[0], zII = self.get_z_and_zII(ints_3c[0], mo_energy[0], nocc[0])
-                homo_target[0] = self.get_homo_target(mo_coeff[0], nocc[0], vxnl[0])
+                homo_target[0] = self.get_homo_target(mo_coeff[0], nocc[0], vxnl[0], vj, 0)
                 vref = self.get_v_ref_w_homo(u_avg, zII, homo_target[0])
                 W3 = self.get_W3_charge_and_homo(zII)
             else:
@@ -194,7 +194,7 @@ class UEXXOEP(exxoep.REXXOEP):
             for s in (0, 1):
                 if self.use_homo_condition:
                     z[s], zII = self.get_z_and_zII(ints_3c[s], mo_energy[s], nocc[s])
-                    homo_target[s] = self.get_homo_target(mo_coeff[s], nocc[s], vxnl[s])
+                    homo_target[s] = self.get_homo_target(mo_coeff[s], nocc[s], vxnl[s], vj, s)
                     vref_oep[s] = self.get_v_ref_w_homo(u[s], zII, homo_target[s])
                     W3 = self.get_W3_charge_and_homo(zII)
                 else:
