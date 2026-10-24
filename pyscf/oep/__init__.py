@@ -36,6 +36,10 @@ Self-consistent RPA-OEP with an RI basis for the response function::
 
     >>> mf_rpa = oep.RPAOEP(mf, 'aug-cc-pvdz-ri', 'cc-pvqz-ri').run()
 
+Hybrid RPA-OEP with a fraction alpha of non-local exchange::
+
+    >>> mf_hrpa = oep.HybridRPAOEP(mf, 'aug-cc-pvdz-ri', 'cc-pvqz-ri', alpha=0.25).run()
+
 Kohn-Sham inversion of a reference density::
 
     >>> inv = oep.KSINV(mf, 'aug-cc-pvdz-ri', dm_ref, e_ref).run()
@@ -50,6 +54,8 @@ from pyscf.oep import rpaoep
 from pyscf.oep import urpaoep
 from pyscf.oep import dftoep
 from pyscf.oep import udftoep
+from pyscf.oep import hybridrpaoep
+from pyscf.oep import uhybridrpaoep
 from pyscf.oep.exxoep import REXXOEP
 from pyscf.oep.uexxoep import UEXXOEP
 from pyscf.oep.ksinv import RKSINV
@@ -58,6 +64,8 @@ from pyscf.oep.rpaoep import RRPAOEP
 from pyscf.oep.urpaoep import URPAOEP
 from pyscf.oep.dftoep import RDFTOEP
 from pyscf.oep.udftoep import UDFTOEP
+from pyscf.oep.hybridrpaoep import RHybridRPAOEP
+from pyscf.oep.uhybridrpaoep import UHybridRPAOEP
 
 
 def EXXOEP(mf, oep_basis, **kwargs):
@@ -110,6 +118,25 @@ def RPAOEP(mf, oep_basis, ri_basis, **kwargs):
         return rpaoep.RRPAOEP(mf, oep_basis, ri_basis, **kwargs)
     else:
         raise NotImplementedError('RPAOEP is not available for %s' % mf.__class__)
+
+
+def HybridRPAOEP(mf, oep_basis, ri_basis, **kwargs):
+    '''Hybrid self-consistent RPA optimized effective potential method.
+
+    Returns a RHybridRPAOEP object for RHF/RKS and a UHybridRPAOEP object for
+    UHF/UKS mean-field objects. Open-shell ROHF/ROKS objects are converted to
+    UHF/UKS. See RHybridRPAOEP and UHybridRPAOEP for the keyword arguments,
+    e.g. alpha, the fraction of non-local exchange (default 0.25).
+    '''
+    if isinstance(mf, scf.uhf.UHF):
+        return uhybridrpaoep.UHybridRPAOEP(mf, oep_basis, ri_basis, **kwargs)
+    elif isinstance(mf, scf.rohf.ROHF) and mf.mol.spin != 0:
+        return uhybridrpaoep.UHybridRPAOEP(scf.addons.convert_to_uhf(mf), oep_basis, ri_basis,
+                                           **kwargs)
+    elif isinstance(mf, scf.hf.RHF):
+        return hybridrpaoep.RHybridRPAOEP(mf, oep_basis, ri_basis, **kwargs)
+    else:
+        raise NotImplementedError('HybridRPAOEP is not available for %s' % mf.__class__)
 
 
 def DFTOEP(mf, oep_basis, **kwargs):
