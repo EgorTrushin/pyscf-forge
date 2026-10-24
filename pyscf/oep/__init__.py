@@ -26,6 +26,10 @@ Simple usage::
     >>> mf = scf.RHF(mol).density_fit().run()
     >>> mf_oep = oep.EXXOEP(mf, 'aug-cc-pvdz-ri').run()
 
+Self-consistent RPA-OEP with an RI basis for the response function::
+
+    >>> mf_rpa = oep.RPAOEP(mf, 'aug-cc-pvdz-ri', 'cc-pvqz-ri').run()
+
 Kohn-Sham inversion of a reference density::
 
     >>> inv = oep.KSINV(mf, 'aug-cc-pvdz-ri', dm_ref, e_ref).run()
@@ -36,10 +40,14 @@ from pyscf.oep import exxoep
 from pyscf.oep import uexxoep
 from pyscf.oep import ksinv
 from pyscf.oep import uksinv
+from pyscf.oep import rpaoep
+from pyscf.oep import urpaoep
 from pyscf.oep.exxoep import REXXOEP
 from pyscf.oep.uexxoep import UEXXOEP
 from pyscf.oep.ksinv import RKSINV
 from pyscf.oep.uksinv import UKSINV
+from pyscf.oep.rpaoep import RRPAOEP
+from pyscf.oep.urpaoep import URPAOEP
 
 
 def EXXOEP(mf, oep_basis, **kwargs):
@@ -75,3 +83,20 @@ def KSINV(mf, oep_basis, dm_ref, e_ref=None, ip=None, **kwargs):
         return ksinv.RKSINV(mf, oep_basis, dm_ref, e_ref, ip, **kwargs)
     else:
         raise NotImplementedError('KSINV is not available for %s' % mf.__class__)
+
+
+def RPAOEP(mf, oep_basis, ri_basis, **kwargs):
+    '''Self-consistent RPA optimized effective potential method.
+
+    Returns a RRPAOEP object for RHF/RKS and a URPAOEP object for UHF/UKS
+    mean-field objects. Open-shell ROHF/ROKS objects are converted to UHF/UKS.
+    See RRPAOEP and URPAOEP for the keyword arguments.
+    '''
+    if isinstance(mf, scf.uhf.UHF):
+        return urpaoep.URPAOEP(mf, oep_basis, ri_basis, **kwargs)
+    elif isinstance(mf, scf.rohf.ROHF) and mf.mol.spin != 0:
+        return urpaoep.URPAOEP(scf.addons.convert_to_uhf(mf), oep_basis, ri_basis, **kwargs)
+    elif isinstance(mf, scf.hf.RHF):
+        return rpaoep.RRPAOEP(mf, oep_basis, ri_basis, **kwargs)
+    else:
+        raise NotImplementedError('RPAOEP is not available for %s' % mf.__class__)

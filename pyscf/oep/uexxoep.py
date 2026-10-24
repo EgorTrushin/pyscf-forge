@@ -38,120 +38,6 @@ from pyscf.scf import uhf
 from pyscf.oep import exxoep
 
 
-def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
-    '''Self-consistent EXX-OEP iterations for open-shell systems.
-
-    Returns:
-        converged, e_tot, mo_energy, mo_coeff, vref_oep, vrest_oep
-        where vref_oep and vrest_oep have shape (2, naux)
-    '''
-    log = logger.new_logger(oep, verbose)
-    cput0 = (logger.process_clock(), logger.perf_counter())
-    if mo_energy is None:
-        mo_energy = oep.mo_energy
-    if mo_coeff is None:
-        mo_coeff = oep.mo_coeff
-    mo_energy = numpy.array(mo_energy, copy=True)
-    mo_coeff = numpy.array(mo_coeff, copy=True)
-    nocc = oep.nocc
-    spin_sym = oep.spin_sym
-
-    h1e = oep._scf.get_hcore()
-    s1e = oep._scf.get_ovlp()
-    e_tot, vj, vxnl = oep.get_energies_and_potentials(mo_coeff)
-
-    if oep.linear_mixing > 0:
-        fock_last = None
-    else:
-        adiis = lib.diis.DIIS(oep)
-
-    converged = False
-    e_last = None
-    for cycle in range(oep.max_cycle):
-        ints_3c = [oep.ao2mo(mo_coeff[s], nocc[s]) for s in (0, 1)]
-        u = [oep.get_u(ints_3c[s], nocc[s]) for s in (0, 1)]
-
-        if oep.vh_via_oep or oep.space_sym:
-            vj = oep.get_vh_via_oep(u[0] + u[1], nocc[0] + nocc[1])
-
-        z = [None, None]
-        homo_target = [None, None]
-        if spin_sym:
-            # One common potential for both spins, with the HOMO condition
-            # (if any) imposed on the alpha HOMO
-            u_avg = .5 * (u[0] + u[1])
-            if oep.use_homo_condition:
-                z[0], zII = oep.get_z_and_zII(ints_3c[0], mo_energy[0], nocc[0])
-                homo_target[0] = oep.get_homo_target(mo_coeff[0], nocc[0], vxnl[0])
-                vref = oep.get_v_ref_w_homo(u_avg, zII, homo_target[0])
-                W3 = oep.get_W3_charge_and_homo(zII)
-            else:
-                vref = oep.get_v_ref(u_avg)
-                W3 = oep.get_W3_charge()
-            W = oep.get_W_spin_sym(W3, ints_3c, nocc)
-            vref_oep = [vref, vref]
-            W = [W, W]
-        else:
-            vref_oep = [None, None]
-            W = [None, None]
-            if not oep.use_homo_condition:
-                W3 = oep.get_W3_charge()
-            for s in (0, 1):
-                if oep.use_homo_condition:
-                    z[s], zII = oep.get_z_and_zII(ints_3c[s], mo_energy[s], nocc[s])
-                    homo_target[s] = oep.get_homo_target(mo_coeff[s], nocc[s], vxnl[s])
-                    vref_oep[s] = oep.get_v_ref_w_homo(u[s], zII, homo_target[s])
-                    W3 = oep.get_W3_charge_and_homo(zII)
-                else:
-                    vref_oep[s] = oep.get_v_ref(u[s])
-                W[s] = oep.get_W(W3, ints_3c[s], nocc[s])
-
-        X0 = [oep.get_X0(ints_3c[s], mo_energy[s], nocc[s], W[s]) for s in (0, 1)]
-        vref_ao = [oep.oep2ao(vref_oep[s]) for s in (0, 1)]
-        rhs = [oep.get_rhs(vref_ao[s], vxnl[s], ints_3c[s], mo_coeff[s],
-                           mo_energy[s], nocc[s], W[s]) for s in (0, 1)]
-
-        if spin_sym:
-            vrest = W[0].dot(scipy.linalg.solve(X0[0] + X0[1], rhs[0] + rhs[1]))
-            vrest_oep = [vrest, vrest]
-        else:
-            vrest_oep = [W[s].dot(scipy.linalg.solve(X0[s], rhs[s])) for s in (0, 1)]
-        vrest_ao = [oep.oep2ao(vrest_oep[s]) for s in (0, 1)]
-
-        for s in ((0,) if spin_sym else (0, 1)):
-            oep.check_potentials(vrest_oep[s], vref_oep[s], vrest_ao[s], vref_ao[s],
-                                 mo_coeff[s], nocc[s], z[s], homo_target[s])
-
-        fock = numpy.array([h1e + vj + vref_ao[s] + vrest_ao[s] for s in (0, 1)])
-        if oep.linear_mixing > 0:
-            if fock_last is not None:
-                fock = (1 - oep.linear_mixing) * fock + oep.linear_mixing * fock_last
-            fock_last = fock
-        else:
-            dm = [mo_coeff[s][:, :nocc[s]].dot(mo_coeff[s][:, :nocc[s]].T) for s in (0, 1)]
-            err = numpy.array([fock[s].dot(dm[s]).dot(s1e) - s1e.dot(dm[s]).dot(fock[s])
-                               for s in (0, 1)])
-            fock = adiis.update(fock, xerr=err)
-
-        for s in (0, 1):
-            mo_energy[s], mo_coeff[s] = oep.eig(fock[s], s1e)
-        e_tot, vj, vxnl = oep.get_energies_and_potentials(mo_coeff)
-
-        if e_last is None:
-            log.info('cycle= %d E= %.15g', cycle + 1, e_tot)
-        else:
-            de = e_tot - e_last
-            log.info('cycle= %d E= %.15g  delta_E= %4.3g', cycle + 1, e_tot, de)
-            if abs(de) < oep.conv_tol:
-                converged = True
-                break
-        e_last = e_tot
-
-    log.timer('UEXX-OEP', *cput0)
-    return (converged, e_tot, mo_energy, mo_coeff,
-            numpy.array(vref_oep), numpy.array(vrest_oep))
-
-
 class UEXXOEP(exxoep.REXXOEP):
     '''Exact-exchange optimized effective potential method for open-shell
     systems.
@@ -247,19 +133,92 @@ class UEXXOEP(exxoep.REXXOEP):
                      self._get_amat(trans, ints_3c[1], nocc[1]))
         return trans.dot(self._coupling_vectors(amat, thr_fai))
 
-    def kernel(self, mo_energy=None, mo_coeff=None):
-        '''Runs the self-consistent OEP calculation.
+    def eig(self, h, s):
+        '''Diagonalizes the alpha and beta Fock matrices h of shape (2, nao, nao).'''
+        e_a, c_a = exxoep.REXXOEP.eig(self, h[0], s)
+        e_b, c_b = exxoep.REXXOEP.eig(self, h[1], s)
+        return numpy.array((e_a, e_b)), numpy.array((c_a, c_b))
+
+    def _diis_mixer(self):
+        # DIIS with the commutator FDS - SDF of each spin as error vector
+        adiis = lib.diis.DIIS(self)
+        nocc = self.nocc
+
+        def mix(fock, s1e, mo_coeff):
+            err = []
+            for s in (0, 1):
+                c_occ = mo_coeff[s][:, :nocc[s]]
+                dm = c_occ.dot(c_occ.T)
+                err.append(fock[s].dot(dm).dot(s1e) - s1e.dot(dm).dot(fock[s]))
+            return adiis.update(fock, xerr=numpy.array(err))
+        return mix
+
+    def get_local_potential(self, mo_energy, mo_coeff, vj, vxnl):
+        '''Solves the EXX-OEP equations for the alpha and beta orbitals.
 
         Returns:
-            Total energy
+            Hartree potential matrix, alpha and beta local potential matrices
+            (AO basis) and a dict of the OEP basis coefficients of the
+            potentials, of shape (2, naux)
         '''
-        self.check_sanity()
-        self.dump_flags()
-        self.build()
-        (self.converged, self.e_tot, self.mo_energy, self.mo_coeff,
-         self.vref_oep, self.vrest_oep) = kernel(self, mo_energy, mo_coeff)
-        self._finalize()
-        return self.e_tot
+        nocc = self.nocc
+        spin_sym = self.spin_sym
+        ints_3c = [self.ao2mo(mo_coeff[s], nocc[s]) for s in (0, 1)]
+        u = [self.get_u(ints_3c[s], nocc[s]) for s in (0, 1)]
+
+        if self.vh_via_oep or self.space_sym:
+            vj = self.get_vh_via_oep(u[0] + u[1], nocc[0] + nocc[1])
+
+        z = [None, None]
+        homo_target = [None, None]
+        if spin_sym:
+            # One common potential for both spins, with the HOMO condition
+            # (if any) imposed on the alpha HOMO
+            u_avg = .5 * (u[0] + u[1])
+            if self.use_homo_condition:
+                z[0], zII = self.get_z_and_zII(ints_3c[0], mo_energy[0], nocc[0])
+                homo_target[0] = self.get_homo_target(mo_coeff[0], nocc[0], vxnl[0])
+                vref = self.get_v_ref_w_homo(u_avg, zII, homo_target[0])
+                W3 = self.get_W3_charge_and_homo(zII)
+            else:
+                vref = self.get_v_ref(u_avg)
+                W3 = self.get_W3_charge()
+            W = self.get_W_spin_sym(W3, ints_3c, nocc)
+            vref_oep = [vref, vref]
+            W = [W, W]
+        else:
+            vref_oep = [None, None]
+            W = [None, None]
+            if not self.use_homo_condition:
+                W3 = self.get_W3_charge()
+            for s in (0, 1):
+                if self.use_homo_condition:
+                    z[s], zII = self.get_z_and_zII(ints_3c[s], mo_energy[s], nocc[s])
+                    homo_target[s] = self.get_homo_target(mo_coeff[s], nocc[s], vxnl[s])
+                    vref_oep[s] = self.get_v_ref_w_homo(u[s], zII, homo_target[s])
+                    W3 = self.get_W3_charge_and_homo(zII)
+                else:
+                    vref_oep[s] = self.get_v_ref(u[s])
+                W[s] = self.get_W(W3, ints_3c[s], nocc[s])
+
+        X0 = [self.get_X0(ints_3c[s], mo_energy[s], nocc[s], W[s]) for s in (0, 1)]
+        vref_ao = [self.oep2ao(vref_oep[s]) for s in (0, 1)]
+        rhs = [self.get_rhs(vref_ao[s], vxnl[s], ints_3c[s], mo_coeff[s],
+                            mo_energy[s], nocc[s], W[s]) for s in (0, 1)]
+
+        if spin_sym:
+            vrest = W[0].dot(scipy.linalg.solve(X0[0] + X0[1], rhs[0] + rhs[1]))
+            vrest_oep = [vrest, vrest]
+        else:
+            vrest_oep = [W[s].dot(scipy.linalg.solve(X0[s], rhs[s])) for s in (0, 1)]
+        vrest_ao = [self.oep2ao(vrest_oep[s]) for s in (0, 1)]
+
+        for s in ((0,) if spin_sym else (0, 1)):
+            self.check_potentials(vrest_oep[s], vref_oep[s], vrest_ao[s], vref_ao[s],
+                                  mo_coeff[s], nocc[s], z[s], homo_target[s])
+        v_ao = numpy.array([vref_ao[s] + vrest_ao[s] for s in (0, 1)])
+        pot = {'vref_oep': numpy.array(vref_oep), 'vrest_oep': numpy.array(vrest_oep)}
+        return vj, v_ao, pot
 
     def _log_homo_lumo(self, log):
         for s, label in enumerate(('alpha', 'beta')):

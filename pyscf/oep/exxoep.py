@@ -45,10 +45,16 @@ from pyscf.scf import hf
 
 
 def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
-    '''Self-consistent EXX-OEP iterations for closed-shell systems.
+    '''Self-consistent OEP iterations.
+
+    The local potential of each cycle is provided by
+    oep.get_local_potential, so the same driver serves the restricted and
+    unrestricted EXX-OEP and RPA-OEP classes.
 
     Returns:
-        converged, e_tot, mo_energy, mo_coeff, vref_oep, vrest_oep
+        converged, e_tot, mo_energy, mo_coeff, pot
+        where pot is the dict of potentials (OEP basis coefficients) of the
+        last cycle, see get_local_potential
     '''
     log = logger.new_logger(oep, verbose)
     cput0 = (logger.process_clock(), logger.perf_counter())
@@ -56,57 +62,22 @@ def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
         mo_energy = oep.mo_energy
     if mo_coeff is None:
         mo_coeff = oep.mo_coeff
-    nocc = oep.nocc
 
     h1e = oep._scf.get_hcore()
     s1e = oep._scf.get_ovlp()
     e_tot, vj, vxnl = oep.get_energies_and_potentials(mo_coeff)
-
-    if oep.linear_mixing > 0:
-        fock_last = None
-    else:
-        adiis = lib.diis.DIIS(oep)
+    mix_fock = oep.get_fock_mixer()
 
     converged = False
     e_last = None
+    pot = {}
     for cycle in range(oep.max_cycle):
-        ints_3c = oep.ao2mo(mo_coeff, nocc)
-        u = 2 * oep.get_u(ints_3c, nocc)
-
-        if oep.vh_via_oep or oep.space_sym:
-            vj = oep.get_vh_via_oep(u, 2 * nocc)
-
-        z = None
-        if oep.use_homo_condition:
-            z, zII = oep.get_z_and_zII(ints_3c, mo_energy, nocc)
-            homo_target = oep.get_homo_target(mo_coeff, nocc, vxnl)
-            vref_oep = oep.get_v_ref_w_homo(u, zII, homo_target)
-            W3 = oep.get_W3_charge_and_homo(zII)
-        else:
-            homo_target = None
-            vref_oep = oep.get_v_ref(u)
-            W3 = oep.get_W3_charge()
-
-        W = oep.get_W(W3, ints_3c, nocc)
-        X0 = oep.get_X0(ints_3c, mo_energy, nocc, W)
-        vref_ao = oep.oep2ao(vref_oep)
-        rhs = oep.get_rhs(vref_ao, vxnl, ints_3c, mo_coeff, mo_energy, nocc, W)
-        vrest_oep = W.dot(scipy.linalg.solve(X0, rhs))
-        vrest_ao = oep.oep2ao(vrest_oep)
-
-        oep.check_potentials(vrest_oep, vref_oep, vrest_ao, vref_ao,
-                             mo_coeff, nocc, z, homo_target)
-
-        fock = h1e + vj + vref_ao + vrest_ao
-        if oep.linear_mixing > 0:
-            if fock_last is not None:
-                fock = (1 - oep.linear_mixing) * fock + oep.linear_mixing * fock_last
-            fock_last = fock
-        else:
-            fock = adiis.update(fock)
-
+        vj, v_ao, pot = oep.get_local_potential(mo_energy, mo_coeff, vj, vxnl)
+        fock = mix_fock(h1e + vj + v_ao, s1e, mo_coeff)
         mo_energy, mo_coeff = oep.eig(fock, s1e)
         e_tot, vj, vxnl = oep.get_energies_and_potentials(mo_coeff)
+        # Correlation energy of the orbitals of this cycle
+        e_tot += pot.get('e_corr', 0)
 
         if e_last is None:
             log.info('cycle= %d E= %.15g', cycle + 1, e_tot)
@@ -118,8 +89,8 @@ def kernel(oep, mo_energy=None, mo_coeff=None, verbose=None):
                 break
         e_last = e_tot
 
-    log.timer('EXX-OEP', *cput0)
-    return converged, e_tot, mo_energy, mo_coeff, vref_oep, vrest_oep
+    log.timer(oep.__class__.__name__, *cput0)
+    return converged, e_tot, mo_energy, mo_coeff, pot
 
 
 def eval_potential(auxmol, coords, v_oep, blksize=2000):
@@ -343,13 +314,16 @@ class REXXOEP(lib.StreamObject):
         self.scf_summary = {'e1': e1, 'coul': e_coul, 'exc': e_x, 'nuc': e_nuc}
         return e1 + e_coul + e_x + e_nuc, vj, vk * -.5
 
-    def ao2mo(self, mo_coeff, nocc):
-        '''Three-center integrals (P|pi) with all MOs p and occupied MOs i.
+    def ao2mo(self, mo_coeff, nocc, int3c=None):
+        '''Three-center integrals (P|pi) with all MOs p and the first nocc
+        MOs i, in the OEP basis or in the auxiliary basis of int3c.
 
         Returns:
             ndarray of shape (naux, nmo, nocc)
         '''
-        tmp = lib.einsum('uvP,vi->Pui', self._int3c, mo_coeff[:, :nocc])
+        if int3c is None:
+            int3c = self._int3c
+        tmp = lib.einsum('uvP,vi->Pui', int3c, mo_coeff[:, :nocc])
         return lib.einsum('Pui,up->Ppi', tmp, mo_coeff)
 
     def oep2ao(self, v_oep):
@@ -499,6 +473,64 @@ class REXXOEP(lib.StreamObject):
                 log.warn('<HOMO|vref|HOMO> = %.12g, required %.12g',
                          vref_homo, homo_target)
 
+    def get_local_potential(self, mo_energy, mo_coeff, vj, vxnl):
+        '''Solves the EXX-OEP equation for the given orbitals.
+
+        Args:
+            vj : Coulomb matrix of the orbitals
+            vxnl : non-local exchange potential matrix of the orbitals
+
+        Returns:
+            Hartree potential matrix, local potential matrix (AO basis) and
+            a dict of the OEP basis coefficients of the potentials
+        '''
+        nocc = self.nocc
+        ints_3c = self.ao2mo(mo_coeff, nocc)
+        u = 2 * self.get_u(ints_3c, nocc)
+
+        if self.vh_via_oep or self.space_sym:
+            vj = self.get_vh_via_oep(u, 2 * nocc)
+
+        z = homo_target = None
+        if self.use_homo_condition:
+            z, zII = self.get_z_and_zII(ints_3c, mo_energy, nocc)
+            homo_target = self.get_homo_target(mo_coeff, nocc, vxnl)
+            vref_oep = self.get_v_ref_w_homo(u, zII, homo_target)
+            W3 = self.get_W3_charge_and_homo(zII)
+        else:
+            vref_oep = self.get_v_ref(u)
+            W3 = self.get_W3_charge()
+
+        W = self.get_W(W3, ints_3c, nocc)
+        X0 = self.get_X0(ints_3c, mo_energy, nocc, W)
+        vref_ao = self.oep2ao(vref_oep)
+        rhs = self.get_rhs(vref_ao, vxnl, ints_3c, mo_coeff, mo_energy, nocc, W)
+        vrest_oep = W.dot(scipy.linalg.solve(X0, rhs))
+        vrest_ao = self.oep2ao(vrest_oep)
+
+        self.check_potentials(vrest_oep, vref_oep, vrest_ao, vref_ao,
+                              mo_coeff, nocc, z, homo_target)
+        return vj, vref_ao + vrest_ao, {'vref_oep': vref_oep, 'vrest_oep': vrest_oep}
+
+    def get_fock_mixer(self):
+        '''Returns a function mix(fock, s1e, mo_coeff) which applies linear
+        mixing (linear_mixing > 0) or DIIS to the Fock matrix of each cycle.'''
+        if self.linear_mixing > 0:
+            alpha = self.linear_mixing
+            fock_last = []
+
+            def mix(fock, s1e, mo_coeff):
+                if fock_last:
+                    fock = (1 - alpha) * fock + alpha * fock_last[0]
+                fock_last[:] = [fock]
+                return fock
+            return mix
+        return self._diis_mixer()
+
+    def _diis_mixer(self):
+        adiis = lib.diis.DIIS(self)
+        return lambda fock, s1e, mo_coeff: adiis.update(fock)
+
     def kernel(self, mo_energy=None, mo_coeff=None):
         '''Runs the self-consistent OEP calculation, starting from the
         orbitals of the mean-field object (or of a previous run).
@@ -510,9 +542,14 @@ class REXXOEP(lib.StreamObject):
         self.dump_flags()
         self.build()
         (self.converged, self.e_tot, self.mo_energy, self.mo_coeff,
-         self.vref_oep, self.vrest_oep) = kernel(self, mo_energy, mo_coeff)
+         pot) = kernel(self, mo_energy, mo_coeff)
+        self._save_potentials(pot)
         self._finalize()
         return self.e_tot
+
+    def _save_potentials(self, pot):
+        self.vref_oep = pot.get('vref_oep')
+        self.vrest_oep = pot.get('vrest_oep')
 
     def _finalize(self):
         log = logger.new_logger(self)

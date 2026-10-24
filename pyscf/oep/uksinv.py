@@ -67,10 +67,7 @@ def kernel(inv, verbose=None):
     else:
         vref_oep = [inv.get_v_ref(u_ref[s]) for s in (0, 1)]
     vref_ao = [inv.oep2ao(vref_oep[s]) for s in (0, 1)]
-    mo_energy = numpy.empty((2, inv.nmo))
-    mo_coeff = numpy.empty((2,) + inv.mo_coeff[0].shape)
-    for s in (0, 1):
-        mo_energy[s], mo_coeff[s] = inv.eig(h1e + vj_ref + vref_ao[s], s1e)
+    mo_energy, mo_coeff = inv.eig(h1e + vj_ref + numpy.array(vref_ao), s1e)
     if inv.vh_via_oep or inv.space_sym:
         vj_ref = inv.get_vh_via_oep(u_ref[0] + u_ref[1], nocc[0] + nocc[1])
 
@@ -149,8 +146,8 @@ def kernel(inv, verbose=None):
                 vx_oep = [W[s].dot(scipy.linalg.solve(X0x[s], rhs_x[s])) + vref_oep[s]
                           for s in (0, 1)]
 
-        for s in (0, 1):
-            mo_energy[s], mo_coeff[s] = inv.eig(h1e + vj_ref + vref_ao[s] + vrest_ao[s], s1e)
+        mo_energy, mo_coeff = inv.eig(
+            h1e + vj_ref + numpy.array([vref_ao[s] + vrest_ao[s] for s in (0, 1)]), s1e)
 
         if spin_sym:
             log.info('cycle= %d  |rhs|= %.3e  mixing= %.3e', cycle + 1, delta_rhs[0], mixing[0])
